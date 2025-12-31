@@ -1,11 +1,12 @@
 node_modules/
 .env
+.env.local
+*.log
 cache/
 artifacts/
 typechain/
 coverage/
 coverage.json
-*.log
 
 # Hardhat
 .hardhat/
@@ -20,3 +21,7 @@ coverage.json
 .DS_Store
 Thumbs.db
 
+# Wallets (private keys - NEVER commit!)
+wallets/
+*.key
+/wallet.json

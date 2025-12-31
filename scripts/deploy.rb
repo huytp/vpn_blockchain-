@@ -10,11 +10,13 @@ require 'dotenv/load'
 # Load environment variables
 Dotenv.load
 
-# Configuration
+# Configuration - Polygon Amoy Testnet only
+CHAIN_ID = 80_002
 TATUM_RPC_URL = ENV['TATUM_POLYGON_AMOY_URL'] || 'https://polygon-amoy.gateway.tatum.io/'
 TATUM_API_KEY = ENV['TATUM_API_KEY']
 PRIVATE_KEY = ENV['PRIVATE_KEY']
-POLYGON_AMOY_CHAIN_ID = 80_002
+EXPLORER_BASE = 'https://amoy.polygonscan.com'
+NETWORK_NAME = 'Polygon Amoy Testnet'
 
 # ============================================================================
 # TatumRPCClient - Handles RPC communication with rate limiting
@@ -228,11 +230,6 @@ class ContractDeployer
     @key = Eth::Key.new(priv: private_key)
   end
 
-  def deploy_with_constructor(bytecode, abi, constructor_params = [])
-    full_bytecode = prepare_bytecode_with_constructor(bytecode, abi, constructor_params)
-    deploy(full_bytecode, abi)
-  end
-
   def deploy(bytecode, abi = nil)
     print_deployment_header
 
@@ -252,18 +249,11 @@ class ContractDeployer
 
   private
 
-  def prepare_bytecode_with_constructor(bytecode, abi, constructor_params)
-    constructor_data = ''
-    if constructor_params.any? && abi
-      constructor_data = ContractHelper.encode_constructor_params(abi, constructor_params)
-    end
-
-    bytecode_clean = bytecode.to_s
-    bytecode_clean = bytecode_clean[2..-1] if bytecode_clean.start_with?('0x')
-    full_bytecode = bytecode_clean + constructor_data
-    full_bytecode = "0x#{full_bytecode}" unless full_bytecode.start_with?('0x')
-
-    full_bytecode
+  def initialize(rpc_client, private_key, chain_id)
+    @rpc = rpc_client
+    @private_key = private_key
+    @chain_id = chain_id
+    @key = Eth::Key.new(priv: private_key)
   end
 
   def print_deployment_header
@@ -429,7 +419,7 @@ class ContractDeployer
 
     puts "\n✅ Transaction sent!"
     puts "📋 Transaction Hash: #{tx_hash}"
-    puts "🔗 View on explorer: https://amoy.polygonscan.com/tx/#{tx_hash}"
+    puts "🔗 View on explorer: #{EXPLORER_BASE}/tx/#{tx_hash}"
     puts "\n⏳ Waiting for confirmation..."
 
     tx_hash
@@ -477,7 +467,7 @@ class ContractDeployer
   def handle_receipt_timeout(tx_hash, max_attempts, delay)
     puts "\n⚠️  Timeout waiting for receipt (waited #{max_attempts * delay} seconds)"
     puts "   Transaction may still be pending. Check manually:"
-    puts "   https://amoy.polygonscan.com/tx/#{tx_hash}"
+    puts "   #{EXPLORER_BASE}/tx/#{tx_hash}"
     nil
   end
 
@@ -496,7 +486,7 @@ class ContractDeployer
   def handle_no_receipt(tx_hash)
     puts "\n⚠️  Could not get transaction receipt"
     puts "   Transaction hash: #{tx_hash}"
-    puts "   Check manually at: https://amoy.polygonscan.com/tx/#{tx_hash}"
+    puts "   Check manually at: #{EXPLORER_BASE}/tx/#{tx_hash}"
     nil
   end
 
@@ -514,7 +504,7 @@ class ContractDeployer
     puts "📍 Contract Address: #{contract_address}"
     puts "📋 Transaction Hash: #{tx_hash}"
     puts "⛽ Gas Used: #{gas_used}"
-    puts "🔗 View contract: https://amoy.polygonscan.com/address/#{contract_address}"
+    puts "🔗 View contract: #{EXPLORER_BASE}/address/#{contract_address}"
 
     {
       address: contract_address,
@@ -527,7 +517,7 @@ class ContractDeployer
     puts "\n❌ Transaction failed!"
     puts "   Status: #{receipt['status']} (#{status_int == 0 ? 'Failed' : 'Unknown'})"
     puts "   Transaction hash: #{tx_hash}"
-    puts "   Check details at: https://amoy.polygonscan.com/tx/#{tx_hash}"
+    puts "   Check details at: #{EXPLORER_BASE}/tx/#{tx_hash}"
 
     log_transaction_details(tx_hash)
     nil
@@ -591,146 +581,6 @@ module ContractHelper
     }
   end
 
-  def self.encode_constructor_params(abi, params)
-    constructor = abi.find { |item| item['type'] == 'constructor' }
-    return '' unless constructor && params.any?
-
-    # Simplified: only supports address parameters
-    # In production, use full ABI encoding library
-    encoded = ''
-    params.each do |param|
-      next unless param.to_s.start_with?('0x')
-
-      # Address parameter - remove 0x and pad to 64 chars (32 bytes)
-      addr = param.to_s[2..-1].downcase
-      encoded += '0' * (64 - addr.length) + addr
-    end
-
-    encoded
-  end
-end
-
-# ============================================================================
-# DeploymentManager - Manages the full deployment process
-# ============================================================================
-class DeploymentManager
-  DEPLOYMENT_DELAY = 2 # seconds between deployments
-
-  CONTRACTS_TO_DEPLOY = [
-    { name: 'DEVPNToken', key: :DEVPN_TOKEN, constructor_params: [] },
-    { name: 'NodeRegistry', key: :NODE_REGISTRY, constructor_params: [] },
-    { name: 'Reward', key: :REWARD, constructor_params: [:token_address] },
-    { name: 'Vesting', key: :VESTING, constructor_params: [:token_address] }
-  ].freeze
-
-  def initialize(rpc_client, deployer)
-    @rpc = rpc_client
-    @deployer = deployer
-    @deployments = {}
-  end
-
-  def deploy_all
-    print_deployment_header
-
-    CONTRACTS_TO_DEPLOY.each_with_index do |contract_config, index|
-      deploy_contract(contract_config, index + 1, CONTRACTS_TO_DEPLOY.length)
-      sleep(DEPLOYMENT_DELAY) unless index == CONTRACTS_TO_DEPLOY.length - 1
-    end
-
-    save_deployments
-    print_deployment_summary
-  end
-
-  private
-
-  def print_deployment_header
-    puts "\n" + "=" * 60
-    puts "📦 Bắt đầu deploy tất cả contracts"
-    puts "=" * 60
-  end
-
-  def deploy_contract(contract_config, current, total)
-    puts "\n[#{current}/#{total}] Deploying #{contract_config[:name]}..."
-
-    artifact = ContractHelper.load_artifact(contract_config[:name])
-    constructor_params = build_constructor_params(contract_config[:constructor_params])
-
-    result = if constructor_params.empty?
-               @deployer.deploy(artifact[:bytecode], artifact[:abi])
-             else
-               @deployer.deploy_with_constructor(
-                 artifact[:bytecode],
-                 artifact[:abi],
-                 constructor_params
-               )
-             end
-
-    raise "Failed to deploy #{contract_config[:name]}" unless result
-
-    @deployments[contract_config[:key]] = result
-    puts "✅ #{contract_config[:name]} deployed: #{result[:address]}"
-  end
-
-  def build_constructor_params(param_types)
-    return [] if param_types.empty?
-
-    param_types.map do |type|
-      case type
-      when :token_address
-        @deployments[:DEVPN_TOKEN][:address]
-      else
-        raise "Unknown constructor parameter type: #{type}"
-      end
-    end
-  end
-
-  def save_deployments
-    DeploymentHelper.save_to_env(@deployments)
-  end
-
-  def print_deployment_summary
-    puts "\n" + "=" * 60
-    puts "✨ Tất cả contracts đã được deploy thành công!"
-    puts "=" * 60
-    puts "\n📋 Deployment Summary:"
-    @deployments.each do |name, info|
-      puts "   #{name}: #{info[:address]}"
-    end
-    print_next_steps
-  end
-
-  def print_next_steps
-    return unless @deployments[:REWARD] && @deployments[:VESTING]
-
-    puts "\n💡 Next steps:"
-    puts "   1. Set Reward contract in DEVPNToken: setRewardContract(#{@deployments[:REWARD][:address]})"
-    puts "   2. Initialize distribution in DEVPNToken: initializeDistribution("
-    puts "      #{@deployments[:VESTING][:address]}"
-    puts "    )"
-    puts "=" * 60
-  end
-end
-
-# ============================================================================
-# DeploymentHelper - Utility functions for deployment operations
-# ============================================================================
-module DeploymentHelper
-  def self.save_to_env(deployments)
-    env_file = File.join(__dir__, '..', '.env')
-    env_content = File.exist?(env_file) ? File.read(env_file) : ''
-
-    deployments.each do |name, info|
-      var_name = "#{name.upcase}_ADDRESS"
-      if env_content.include?("#{var_name}=")
-        env_content.gsub!(/#{var_name}=.*/, "#{var_name}=#{info[:address]}")
-      else
-        env_content += "\n#{var_name}=#{info[:address]}\n"
-      end
-    end
-
-    File.write(env_file, env_content)
-    puts "\n💾 Saved all contract addresses to .env file"
-  end
 end
 
 # ============================================================================
@@ -770,6 +620,8 @@ def print_header
   puts "=" * 60
   puts "🚀 DEVPNToken Deployment Script"
   puts "=" * 60
+  puts "📡 Network: Polygon Amoy Testnet"
+  puts "💰 Currency: MATIC"
   puts "📡 Using Tatum RPC Gateway"
   puts "⚠️  Note: Free plan has 3 requests/second limit"
   puts "   Script will automatically handle rate limiting"
@@ -782,8 +634,10 @@ def verify_chain_id(rpc)
   chain_id = chain_id_hex.to_s.to_i(16)
   puts "\n🔗 Connected to chain ID: #{chain_id}"
 
-  if chain_id != POLYGON_AMOY_CHAIN_ID
-    puts "⚠️  Warning: Chain ID không khớp với Polygon Amoy (#{POLYGON_AMOY_CHAIN_ID})"
+  if chain_id != CHAIN_ID
+    puts "⚠️  Warning: Chain ID không khớp với Polygon Amoy (expected: #{CHAIN_ID}, got: #{chain_id})"
+  else
+    puts "✅ Chain ID verified: Polygon Amoy Testnet"
   end
 
   chain_id
@@ -799,8 +653,36 @@ begin
   chain_id = verify_chain_id(rpc)
   deployer = ContractDeployer.new(rpc, PRIVATE_KEY, chain_id)
 
-  manager = DeploymentManager.new(rpc, deployer)
-  manager.deploy_all
+  # Deploy DEVPNToken
+  puts "\n" + "=" * 60
+  puts "📦 Deploying DEVPNToken"
+  puts "=" * 60
+
+  artifact = ContractHelper.load_artifact('DEVPNToken')
+  result = deployer.deploy(artifact[:bytecode], artifact[:abi])
+
+  if result && result[:address]
+    # Save to .env file
+    env_file = File.join(__dir__, '..', '.env')
+    env_content = File.exist?(env_file) ? File.read(env_file) : ''
+
+    if env_content.include?('DEVPN_TOKEN_ADDRESS=')
+      env_content.gsub!(/DEVPN_TOKEN_ADDRESS=.*/, "DEVPN_TOKEN_ADDRESS=#{result[:address]}")
+    else
+      env_content += "\n# DeVPN Token Contract\nDEVPN_TOKEN_ADDRESS=#{result[:address]}\n"
+    end
+
+    File.write(env_file, env_content)
+    puts "\n💾 Saved DEVPN_TOKEN_ADDRESS to .env file"
+
+    puts "\n" + "=" * 60
+    puts "✨ Deployment completed successfully!"
+    puts "=" * 60
+    puts "\n📋 Contract Address: #{result[:address]}"
+    puts "🔗 View on explorer: #{EXPLORER_BASE}/address/#{result[:address]}"
+  else
+    raise "Failed to deploy DEVPNToken"
+  end
 
 rescue => e
   puts "\n❌ Error: #{e.message}"
