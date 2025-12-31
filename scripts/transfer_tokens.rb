@@ -180,12 +180,12 @@ end
 CHAIN_ID = 80_002
 TATUM_RPC_URL = ENV['TATUM_POLYGON_AMOY_URL'] || 'https://polygon-amoy.gateway.tatum.io/'
 TATUM_API_KEY = ENV['TATUM_API_KEY']
-TOKEN_ADDRESS = ENV['MY_WALLET_ADDRESS']
+TOKEN_ADDRESS = ENV['DEVPN_TOKEN_ADDRESS']
 
 EXPLORER_BASE = 'https://amoy.polygonscan.com'
-PRIVATE_KEY = ENV['PRIVATE_KEY']
+PRIVATE_KEY = ENV['WALLET_PRIVATE_KEY']
 # Amount to transfer: 200 DEVPN (with 18 decimals)
-TRANSFER_AMOUNT = 200 * 10**18
+TRANSFER_AMOUNT = 1 * 10**18
 
 def hex_to_int(hex_value)
   return 0 if hex_value.nil?
@@ -361,7 +361,7 @@ begin
   end
 
   unless TOKEN_ADDRESS
-    raise "❌ MY_WALLET_ADDRESS not found in .env file"
+    raise "❌ DEVPN_TOKEN_ADDRESS not found in .env file"
   end
 
   unless PRIVATE_KEY
@@ -369,7 +369,7 @@ begin
   end
 
   # Get recipient address
-  recipient_address = ENV['WALLET_ADDRESS']
+  recipient_address = ENV['TARGET_WALLET_ADDRESS']
 
   # Try to load from wallet.json if not in .env
   unless recipient_address
